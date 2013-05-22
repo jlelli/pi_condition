@@ -74,6 +74,7 @@ int sched_setparam2(pid_t pid,
 int sched_getparam2(pid_t pid, struct sched_param2 *param);
 
 int pthread_cond_helpers_add(pthread_cond_t *cond, pid_t pid);
+
 int pthread_cond_helpers_del(pthread_cond_t *cond, pid_t pid);
 
 #endif /* __DL_SYSCALLS__ */
