@@ -24,6 +24,9 @@
 
 #define SCHED_DEADLINE	6
 #define FUTEX_COND_HELPER_MAN   13
+#define FUTEX_PRIVATE_FLAG      128
+#define FUTEX_COND_HELPER_MAN_PRIVATE   (FUTEX_COND_HELPER_MAN | \
+                                         FUTEX_PRIVATE_FLAG)
 
 /* XXX use the proper syscall numbers */
 #ifdef __x86_64__

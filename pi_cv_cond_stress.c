@@ -58,6 +58,7 @@ void *inc_count(void *t)
 
 	printf("Adding helper thread: thread %ld prio 93 pid %d\n", my_id, my_pid);
 	pthread_cond_helpers_add(&count_threshold_cv, my_pid);
+	sleep(2);
 
 	printf("Starting inc_count(): thread %ld prio 93\n", my_id);
 	
@@ -198,10 +199,10 @@ int main(int argc, char *argv[])
 	/* For portability, explicitly create threads in a joinable state */
 	pthread_attr_init(&attr);
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
-	pthread_create(&threads[0], &attr, watch_count, (void *)t1);
-	sleep(1);
 	pthread_create(&threads[1], &attr, inc_count, (void *)t2);
 	sleep(1);
+	pthread_create(&threads[0], &attr, watch_count, (void *)t1);
+	sleep(3);
 	pthread_create(&threads[2], &attr, annoyer, (void *)t3);
 	
 	/* Wait for all threads to complete */

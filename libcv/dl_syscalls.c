@@ -23,7 +23,7 @@ int pthread_cond_helpers_add(pthread_cond_t *cond, pid_t pid)
 
 	pcond = &cond->__data.__futex;
 
-	return syscall(__NR_futex, pcond, FUTEX_COND_HELPER_MAN,
+	return syscall(__NR_futex, pcond, FUTEX_COND_HELPER_MAN_PRIVATE,
 		       pid, NULL, NULL, 1);
 }
 
@@ -33,6 +33,6 @@ int pthread_cond_helpers_del(pthread_cond_t *cond, pid_t pid)
 
 	pcond = &cond->__data.__futex;
 
-	return syscall(__NR_futex, pcond, FUTEX_COND_HELPER_MAN,
+	return syscall(__NR_futex, pcond, FUTEX_COND_HELPER_MAN_PRIVATE,
 		       pid, NULL, NULL, 0);
 }
