@@ -21,7 +21,9 @@
 int count = 0;
 int trace_fd = -1;
 int marker_fd = -1;
+int pi_cv_enabled = 0;
 pthread_mutex_t count_mutex;
+pthread_mutexattr_t count_mutex_attr;
 pthread_cond_t count_threshold_cv;
 
 static inline busywait(struct timespec *to)
@@ -60,12 +62,14 @@ void *inc_count(void *t)
 		exit(EXIT_FAILURE);
 	}
 
-	printf("Adding helper thread: thread %ld prio 93 pid %d\n", my_id, my_pid);
-	ftrace_write(marker_fd, "helps on cv %p\n", &count_threshold_cv);
-	pthread_cond_helpers_add(&count_threshold_cv, my_pid);
-	sleep(2);
+	if (pi_cv_enabled) {
+		ftrace_write(marker_fd, "Adding helper thread: thread %ld prio 93 pid %d\n", my_id, my_pid);
+		pthread_cond_helpers_add(&count_threshold_cv, my_pid);
+		ftrace_write(marker_fd, "helps on cv %p\n", &count_threshold_cv);
+	}
 
-	printf("Starting inc_count(): thread %ld prio 93\n", my_id);
+	sleep(1);
+	ftrace_write(marker_fd, "Starting inc_count(): thread %ld prio 93\n", my_id);
 	
 	pthread_mutex_lock(&count_mutex);
 
@@ -74,18 +78,18 @@ void *inc_count(void *t)
 	busywait(&twait);
 	count++;
 	
-	printf("inc_count(): thread %ld, count = %d\n",
-	       my_id, count);
 	ftrace_write(marker_fd, "signals on cv %p\n", &count_threshold_cv);
-	pthread_cond_signal(&count_threshold_cv);
-	printf("Just sent signal.\n");
-	printf("inc_count(): thread %ld, count = %d, unlocking mutex\n", 
+	pthread_cond_broadcast(&count_threshold_cv);
+	ftrace_write(marker_fd, "Just sent signal.\n");
+	ftrace_write(marker_fd, "inc_count(): thread %ld, count = %d, unlocking mutex\n", 
 	       my_id, count);
 	pthread_mutex_unlock(&count_mutex);
 
-	pthread_cond_helpers_del(&count_threshold_cv, my_pid);
-	ftrace_write(marker_fd, "stop helping on cv %p\n", &count_threshold_cv);
-	printf("Removing helper thread: thread %ld prio 93 pid %d\n", my_id, my_pid);
+	if (pi_cv_enabled) {
+		pthread_cond_helpers_del(&count_threshold_cv, my_pid);
+		ftrace_write(marker_fd, "stop helping on cv %p\n", &count_threshold_cv);
+		ftrace_write(marker_fd, "Removing helper thread: thread %ld prio 93 pid %d\n", my_id, my_pid);
+	}
 	pthread_exit(NULL);
 }
 
@@ -97,6 +101,8 @@ void *watch_count(void *t)
 	struct sched_param param;
 	cpu_set_t mask;
 	
+	sleep(1);
+
 	CPU_ZERO(&mask);
 	CPU_SET(0, &mask);
 	ret = sched_setaffinity(0, sizeof(mask), &mask);
@@ -113,7 +119,7 @@ void *watch_count(void *t)
 		printf("pthread_setschedparam failed\n"); 
 		exit(EXIT_FAILURE);
 	}
-	printf("Starting watch_count(): thread %ld prio 95\n", my_id);
+	ftrace_write(marker_fd, "Starting watch_count(): thread %ld prio 95\n", my_id);
 	twait = usec_to_timespec(500000L);
 	busywait(&twait);
 	
@@ -122,19 +128,18 @@ void *watch_count(void *t)
 	will automatically and atomically unlock mutex while it waits. 
 	*/
 	pthread_mutex_lock(&count_mutex);
-	printf("watch_count(): thread %ld Count= %d. Going into wait...\n", my_id,count);
+	ftrace_write(marker_fd, "watch_count(): thread %ld. Going into wait...\n", my_id,count);
 	ftrace_write(marker_fd, "waits on cv %p\n", &count_threshold_cv);
 	pthread_cond_wait(&count_threshold_cv, &count_mutex);
 	ftrace_write(marker_fd, "wakes on cv %p\n", &count_threshold_cv);
 	/* "Consume" the item... */
-	printf("watch_count(): thread %ld Condition signal received. Count= %d\n", my_id,count);
-	printf("watch_count(): thread %ld Consuming an item...\n", my_id,count);
+	ftrace_write(marker_fd, "watch_count(): thread %ld Condition signal received. Count= %d\n", my_id,count);
+	ftrace_write(marker_fd, "watch_count(): thread %ld Consuming an item...\n", my_id,count);
 	twait = usec_to_timespec(2000000L);
 	busywait(&twait);
 	count -= 1;
-	printf("watch_count(): thread %ld count now = %d.\n", my_id, count);
 	
-	printf("watch_count(): thread %ld Unlocking mutex.\n", my_id);
+	ftrace_write(marker_fd, "watch_count(): thread %ld Unlocking mutex.\n", my_id);
 	pthread_mutex_unlock(&count_mutex);
 
 	pthread_exit(NULL);
@@ -164,16 +169,15 @@ void *annoyer(void *t)
 		printf("pthread_setschedparam failed\n"); 
 		exit(EXIT_FAILURE);
 	}
-	printf("Starting annoyer(): thread %ld prio 94\n", my_id);
+	ftrace_write(marker_fd, "Starting annoyer(): thread %ld prio 94\n", my_id);
 
-	printf("annoyer thread should preempt inc_count for 5sec\n");
+	ftrace_write(marker_fd, "annoyer thread should preempt inc_count for 5sec\n");
 
 	twait = usec_to_timespec(5000000L);
 	ftrace_write(marker_fd, "starts running...\n");
 	busywait(&twait);
 
-	printf("annoyer thread dies... inc_count can resume\n");
-	ftrace_write(marker_fd, "dies\n");
+	ftrace_write(marker_fd, "annoyer thread dies...\n");
 	pthread_exit(NULL);
 }
 
@@ -187,6 +191,9 @@ int main(int argc, char *argv[])
 	cpu_set_t mask;
 	char *debugfs;
 	char path[256];
+	
+	if (argc > 1)
+		pi_cv_enabled = atoi(argv[1]);
 
 	debugfs = "/debug";
 	strcpy(path, debugfs);
@@ -217,7 +224,9 @@ int main(int argc, char *argv[])
 	}
 	
 	/* Initialize mutex and condition variable objects */
-	pthread_mutex_init(&count_mutex, NULL);
+	pthread_mutexattr_init(&count_mutex_attr);
+	pthread_mutexattr_setprotocol(&count_mutex_attr, PTHREAD_PRIO_INHERIT);
+	pthread_mutex_init(&count_mutex, &count_mutex_attr);
 	pthread_cond_init (&count_threshold_cv, NULL);
 	
 	/* For portability, explicitly create threads in a joinable state */
@@ -225,7 +234,6 @@ int main(int argc, char *argv[])
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
 	ftrace_write(marker_fd, "[main]: creating inc_count\n");
 	pthread_create(&threads[1], &attr, inc_count, (void *)t2);
-	sleep(1);
 	ftrace_write(marker_fd, "[main]: creating watch_count\n");
 	pthread_create(&threads[0], &attr, watch_count, (void *)t1);
 	sleep(3);
