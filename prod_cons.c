@@ -26,15 +26,18 @@
 #include <sys/stat.h> 
 #include <fcntl.h>
 #include <assert.h>
+#include <sys/types.h>
+#include <signal.h>
 #include "rt-app_utils.h"
 #include "libcv/dl_syscalls.h"
 
 #define	BSIZE		8
-#define NUM_PROD	4
-#define NUM_CONS	2
+#define NUM_PROD	2
+#define NUM_CONS	1
+#define	DURATION	10
 
 typedef struct {
-	char buf[BSIZE];
+	int buf[BSIZE];
 	int occupied;
 	int nextin;
 	int nextout;
@@ -45,69 +48,220 @@ typedef struct {
 } buffer_t;
 
 buffer_t buffer;
+pid_t pids[NUM_PROD + NUM_CONS];
 int trace_fd = -1;
 int marker_fd = -1;
 int pi_cv_enabled = 0;
+volatile int shutdown = 0;
+
+static inline busywait(struct timespec *to)
+{
+	struct timespec t_step;
+	while (1) {
+		clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t_step);
+		if (!timespec_lower(&t_step, to))
+			break;
+	}
+}
 
 void *producer(void *d)
 {
-	char item = 'a';
+	int ret;
+	struct sched_param param;
+	long id = (long) d;
+	int item = id;
 	buffer_t *b = &buffer;
+	struct timespec twait, now;
+	cpu_set_t mask;
+	pid_t my_pid = gettid();
 
-	pthread_mutex_lock(&b->mutex);
+	pids[id] = my_pid;
+	
+	CPU_ZERO(&mask);
+	CPU_SET(0, &mask);
+	ret = sched_setaffinity(0, sizeof(mask), &mask);
+	if (ret != 0) {
+		printf("pthread_setaffinity failed\n"); 
+		exit(EXIT_FAILURE);
+	}
+	
+	param.sched_priority = 92;
+	ret = pthread_setschedparam(pthread_self(), 
+				    SCHED_FIFO, 
+				    &param);
+	if (ret != 0) {
+		printf("pthread_setschedparam failed\n"); 
+		exit(EXIT_FAILURE);
+	}
 
-	while (b->occupied >= BSIZE)
-		pthread_cond_wait(&b->less, &b->mutex);
+	if (pi_cv_enabled) {
+		ftrace_write(marker_fd, "Adding helper thread: pid %d,"
+			     " prio 92\n", my_pid);
+		pthread_cond_helpers_add(&buffer.more, my_pid);
+		ftrace_write(marker_fd, "[prod %d] helps on cv %p\n",
+			     my_pid, &buffer.more);
+	}
 
-	assert(b->occupied < BSIZE);
+	while(!shutdown) {
+		pthread_mutex_lock(&b->mutex);
 
-	b->buf[b->nextin++] = item;
+		while (b->occupied >= BSIZE)
+			pthread_cond_wait(&b->less, &b->mutex);
 
-	b->nextin %= BSIZE;
-	b->occupied++;
+		assert(b->occupied < BSIZE);
 
-	/*
-	 * now: either b->occupied < BSIZE and b->nextin is the index
-	 * of the next empty slot in the buffer, or
-	 * b->occupied == BSIZE and b->nextin is the index of the
-	 * next (occupied) slot that will be emptied by a consumer
-	 * (such as b->nextin == b->nextout)
-	 */
+		b->buf[b->nextin++] = item;
+		twait = usec_to_timespec(600000L);
+		clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now);
+		twait = timespec_add(&now, &twait);
+		busywait(&twait);
+		ftrace_write(marker_fd, "[prod %d] produced %d\n", my_pid, item);
 
-	pthread_cond_signal(&b->more);
+		b->nextin %= BSIZE;
+		b->occupied++;
 
-	pthread_mutex_unlock(&b->mutex);
+		/*
+		 * now: either b->occupied < BSIZE and b->nextin is the index
+		 * of the next empty slot in the buffer, or
+		 * b->occupied == BSIZE and b->nextin is the index of the
+		 * next (occupied) slot that will be emptied by a consumer
+		 * (such as b->nextin == b->nextout)
+		 */
+	
+		pthread_cond_signal(&b->more);
+	
+		pthread_mutex_unlock(&b->mutex);
+		sleep(1);
+	}
+
+	if (pi_cv_enabled) {
+		pthread_cond_helpers_del(&buffer.more, my_pid);
+		ftrace_write(marker_fd, "[prod %d] stop helping on cv %p\n",
+			     my_pid, &buffer.more);
+		ftrace_write(marker_fd, "Removing helper thread: pid %d,"
+			     " prio 92\n", my_pid);
+	}
 }
 
 void *consumer(void *d)
 {
-	char item;
+	int ret;
+	struct sched_param param;
+	long id = (long) d;
+	int item;
 	buffer_t *b = &buffer;
-	pthread_mutex_lock(&b->mutex);
-	while(b->occupied <= 0)
-		pthread_cond_wait(&b->more, &b->mutex);
+	struct timespec twait, now;
+	cpu_set_t mask;
+	pid_t my_pid = gettid();
 
-	assert(b->occupied > 0);
-
-	item = b->buf[b->nextout++];
-	b->nextout %= BSIZE;
-	b->occupied--;
-
-	/*
-	 * now: either b->occupied > 0 and b->nextout is the index
-	 * of the next occupied slot in the buffer, or
-	 * b->occupied == 0 and b->nextout is the index of the next
-	 * (empty) slot that will be filled by a producer (such as
-	 * b->nextout == b->nextin)
+	pids[id] = my_pid;
+	
+	CPU_ZERO(&mask);
+	CPU_SET(0, &mask);
+	ret = sched_setaffinity(0, sizeof(mask), &mask);
+	if (ret != 0) {
+		printf("pthread_setaffinity failed\n"); 
+		exit(EXIT_FAILURE);
+	}
+	
+	param.sched_priority = 94;
+	ret = pthread_setschedparam(pthread_self(), 
+				    SCHED_FIFO, 
+				    &param);
+	if (ret != 0) {
+		printf("pthread_setschedparam failed\n"); 
+		exit(EXIT_FAILURE);
+	}
+	
+	/**
+	 * Give producers some time to set up.
 	 */
+	sleep(1);
 
-	pthread_cond_signal(&b->less);
-	pthread_mutex_unlock(&b->mutex);
+	while(!shutdown) {
+		pthread_mutex_lock(&b->mutex);
+		while(b->occupied <= 0) {
+			ftrace_write(marker_fd, "[cons %d] waits\n",
+				     my_pid);
+			pthread_cond_wait(&b->more, &b->mutex);
+		}
+	
+		assert(b->occupied > 0);
+	
+		item = b->buf[b->nextout++];
+		twait = usec_to_timespec(300000L);
+		clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now);
+		twait = timespec_add(&now, &twait);
+		busywait(&twait);
+		ftrace_write(marker_fd, "[cons %d] consumed %d\n", my_pid, item);
+
+		b->nextout %= BSIZE;
+		b->occupied--;
+	
+		/*
+		 * now: either b->occupied > 0 and b->nextout is the index
+		 * of the next occupied slot in the buffer, or
+		 * b->occupied == 0 and b->nextout is the index of the next
+		 * (empty) slot that will be filled by a producer (such as
+		 * b->nextout == b->nextin)
+		 */
+	
+		pthread_cond_signal(&b->less);
+		pthread_mutex_unlock(&b->mutex);
+	}
+}
+
+void *annoyer(void *d)
+{
+	int ret;
+	long id = (long) d;
+	struct timespec twait, now;
+	struct sched_param param;
+	cpu_set_t mask;
+	pid_t my_pid = gettid();
+
+	pids[id] = my_pid;
+	
+	CPU_ZERO(&mask);
+	CPU_SET(0, &mask);
+	ret = sched_setaffinity(0, sizeof(mask), &mask);
+	if (ret != 0) {
+		printf("pthread_setaffinity failed\n"); 
+		exit(EXIT_FAILURE);
+	}
+	
+	param.sched_priority = 93;
+	ret = pthread_setschedparam(pthread_self(), 
+				    SCHED_FIFO, 
+				    &param);
+	if (ret != 0) {
+		printf("pthread_setschedparam failed\n"); 
+		exit(EXIT_FAILURE);
+	}
+
+	/**
+	 * Give other some time to warm up.
+	 */
+	sleep(2);
+
+	ftrace_write(marker_fd, "Starting annoyer(): prio 93\n");
+
+	while(1) {
+		twait = usec_to_timespec(200000L);
+		ftrace_write(marker_fd, "[annoyer %d] starts running...\n", my_pid);
+		clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now);
+		twait = timespec_add(&now, &twait);
+		busywait(&twait);
+		ftrace_write(marker_fd, "[annoyer %d] sleeps.\n", my_pid);
+		sleep(1);
+	}
+	pthread_exit(NULL);
 }
 
 int main(int argc, char *argv[])
 {
-	int i, rc, ret; 
+	int i, ret; 
+	long id = 0;
 	pthread_t threads[NUM_PROD + NUM_CONS];
 	pthread_attr_t attr;
 	struct sched_param param;
@@ -158,13 +312,24 @@ int main(int argc, char *argv[])
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
 	
 	for (i = 0; i < NUM_CONS; i++) {
-		//ftrace_write(marker_fd, "[main]: creating consumer()\n");
-		pthread_create(&threads[i], &attr, consumer, NULL);
+		ftrace_write(marker_fd, "[main]: creating consumer()\n");
+		pthread_create(&threads[i], &attr, consumer, (void *)id);
+		id++;
 	}
 
 	for (i = NUM_CONS; i < (NUM_CONS + NUM_PROD); i++) {
-		//ftrace_write(marker_fd, "[main]: creating producer()\n");
-		pthread_create(&threads[i], &attr, producer, NULL);
+		ftrace_write(marker_fd, "[main]: creating producer()\n");
+		pthread_create(&threads[i], &attr, producer, (void *)id);
+		id++;
+	}
+
+	ftrace_write(marker_fd, "[main]: creating annoyer()\n");
+	pthread_create(&threads[i], &attr, annoyer, (void *)id);
+
+	sleep(DURATION);
+	shutdown = 1;
+	for (i = 0; i < (NUM_CONS + NUM_PROD); i++) {
+		kill(pids[i], 9);
 	}
 	
 	/* Wait for all threads to complete */
