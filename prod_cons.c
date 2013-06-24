@@ -23,6 +23,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <sys/stat.h> 
 #include <fcntl.h>
 #include <assert.h>
@@ -32,9 +33,20 @@
 #include "libcv/dl_syscalls.h"
 
 #define	BSIZE		8
-#define NUM_PROD	2
-#define NUM_CONS	1
-#define	DURATION	10
+#define MAX_PROD	10
+#define MAX_CONS	10
+#define MAX_ANNOY	10
+
+struct global_args_t {
+	int num_prod;		/* -p # of producers */
+	int num_cons;		/* -c # of consumers */
+	int num_annoy;		/* -a # of annoyers */
+	int pi_cv_enabled;	/* -P PI-cond enabled */
+	int ftrace;		/* -f ftrace enabled */
+	int duration;		/* -d duration (sec) */
+} global_args;
+
+static const char *opt_string = "p:c:a:Pfd:";
 
 typedef struct {
 	int buf[BSIZE];
@@ -48,7 +60,7 @@ typedef struct {
 } buffer_t;
 
 buffer_t buffer;
-pid_t pids[NUM_PROD + NUM_CONS];
+pid_t pids[MAX_PROD + MAX_CONS + MAX_ANNOY];
 int trace_fd = -1;
 int marker_fd = -1;
 int pi_cv_enabled = 0;
@@ -94,12 +106,14 @@ void *producer(void *d)
 		exit(EXIT_FAILURE);
 	}
 
-	if (pi_cv_enabled) {
-		ftrace_write(marker_fd, "Adding helper thread: pid %d,"
-			     " prio 92\n", my_pid);
+	if (global_args.pi_cv_enabled) {
+		if (global_args.ftrace)
+			ftrace_write(marker_fd, "Adding helper thread: pid %d,"
+				     " prio 92\n", my_pid);
 		pthread_cond_helpers_add(&buffer.more, my_pid);
-		ftrace_write(marker_fd, "[prod %d] helps on cv %p\n",
-			     my_pid, &buffer.more);
+		if (global_args.ftrace)
+			ftrace_write(marker_fd, "[prod %d] helps on cv %p\n",
+				     my_pid, &buffer.more);
 	}
 
 	while(!shutdown) {
@@ -115,7 +129,9 @@ void *producer(void *d)
 		clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now);
 		twait = timespec_add(&now, &twait);
 		busywait(&twait);
-		ftrace_write(marker_fd, "[prod %d] produced %d\n", my_pid, item);
+		if (global_args.ftrace)
+			ftrace_write(marker_fd, "[prod %d] produced %d\n",
+				     my_pid, item);
 
 		b->nextin %= BSIZE;
 		b->occupied++;
@@ -134,12 +150,14 @@ void *producer(void *d)
 		sleep(1);
 	}
 
-	if (pi_cv_enabled) {
+	if (global_args.pi_cv_enabled) {
 		pthread_cond_helpers_del(&buffer.more, my_pid);
-		ftrace_write(marker_fd, "[prod %d] stop helping on cv %p\n",
-			     my_pid, &buffer.more);
-		ftrace_write(marker_fd, "Removing helper thread: pid %d,"
-			     " prio 92\n", my_pid);
+		if (global_args.ftrace) {
+			ftrace_write(marker_fd, "[prod %d] stop helping"
+				     " on cv %p\n", my_pid, &buffer.more);
+			ftrace_write(marker_fd, "Removing helper thread:"
+				     " pid %d, prio 92\n", my_pid);
+		}
 	}
 }
 
@@ -181,8 +199,9 @@ void *consumer(void *d)
 	while(!shutdown) {
 		pthread_mutex_lock(&b->mutex);
 		while(b->occupied <= 0) {
-			ftrace_write(marker_fd, "[cons %d] waits\n",
-				     my_pid);
+			if (global_args.ftrace)
+				ftrace_write(marker_fd, "[cons %d] waits\n",
+					     my_pid);
 			pthread_cond_wait(&b->more, &b->mutex);
 		}
 	
@@ -193,7 +212,9 @@ void *consumer(void *d)
 		clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now);
 		twait = timespec_add(&now, &twait);
 		busywait(&twait);
-		ftrace_write(marker_fd, "[cons %d] consumed %d\n", my_pid, item);
+		if (global_args.ftrace)
+			ftrace_write(marker_fd, "[cons %d] consumed %d\n",
+				     my_pid, item);
 
 		b->nextout %= BSIZE;
 		b->occupied--;
@@ -244,15 +265,22 @@ void *annoyer(void *d)
 	 */
 	sleep(2);
 
-	ftrace_write(marker_fd, "Starting annoyer(): prio 93\n");
+	if (global_args.ftrace)
+		ftrace_write(marker_fd, "Starting annoyer(): prio 93\n");
 
 	while(1) {
 		twait = usec_to_timespec(200000L);
-		ftrace_write(marker_fd, "[annoyer %d] starts running...\n", my_pid);
+		if (global_args.ftrace)
+			ftrace_write(marker_fd,
+				     "[annoyer %d] starts running...\n",
+				     my_pid);
 		clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now);
 		twait = timespec_add(&now, &twait);
 		busywait(&twait);
-		ftrace_write(marker_fd, "[annoyer %d] sleeps.\n", my_pid);
+		if (global_args.ftrace)
+			ftrace_write(marker_fd,
+				     "[annoyer %d] sleeps.\n",
+				     my_pid);
 		sleep(1);
 	}
 	pthread_exit(NULL);
@@ -260,28 +288,60 @@ void *annoyer(void *d)
 
 int main(int argc, char *argv[])
 {
-	int i, ret; 
+	int i, ret, opt = 0; 
 	long id = 0;
-	pthread_t threads[NUM_PROD + NUM_CONS];
+	pthread_t threads[MAX_PROD + MAX_CONS + MAX_ANNOY];
 	pthread_attr_t attr;
 	struct sched_param param;
 	cpu_set_t mask;
 	char *debugfs;
 	char path[256];
-	
-	if (argc > 1)
-		pi_cv_enabled = atoi(argv[1]);
 
-	debugfs = "/debug";
-	strcpy(path, debugfs);
-	strcat(path,"/tracing/tracing_on");
-	trace_fd = open(path, O_WRONLY);
-	if (trace_fd >= 0)
-	        write(trace_fd, "1", 1);
+	global_args.num_prod = 1;
+	global_args.num_cons = 1;
+	global_args.num_annoy = 1;
+	global_args.pi_cv_enabled = 0;
+	global_args.ftrace = 0;
+	global_args.duration = 10;
 
-	strcpy(path, debugfs);
-	strcat(path,"/tracing/trace_marker");
-	marker_fd = open(path, O_WRONLY);
+	opt = getopt(argc, argv, opt_string);
+	while (opt != -1) {
+		switch (opt) {
+		case 'p':
+			global_args.num_prod = atoi(optarg);
+			break;
+		case 'c':	
+			global_args.num_cons = atoi(optarg);
+			break;
+		case 'a':	
+			global_args.num_annoy = atoi(optarg);
+			break;
+		case 'P':	
+			global_args.pi_cv_enabled = 1;
+			break;
+		case 'f':	
+			global_args.ftrace = 1;
+			break;
+		case 'd':	
+			global_args.duration = atoi(optarg);
+			break;
+		}
+		
+		opt = getopt(argc, argv, opt_string);
+	}
+
+	if (global_args.ftrace) {
+		debugfs = "/debug";
+		strcpy(path, debugfs);
+		strcat(path,"/tracing/tracing_on");
+		trace_fd = open(path, O_WRONLY);
+		if (trace_fd >= 0)
+		        write(trace_fd, "1", 1);
+
+		strcpy(path, debugfs);
+		strcat(path,"/tracing/trace_marker");
+		marker_fd = open(path, O_WRONLY);
+	}
 	
 	CPU_ZERO(&mask);
 	CPU_SET(1, &mask);
@@ -291,7 +351,7 @@ int main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 	
-	param.sched_priority = 96;
+	param.sched_priority = 99;
 	ret = pthread_setschedparam(pthread_self(), 
 				    SCHED_FIFO, 
 				    &param);
@@ -311,35 +371,46 @@ int main(int argc, char *argv[])
 	pthread_attr_init(&attr);
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
 	
-	for (i = 0; i < NUM_CONS; i++) {
-		ftrace_write(marker_fd, "[main]: creating consumer()\n");
+	for (i = 0; i < global_args.num_cons; i++) {
+		if (global_args.ftrace)
+			ftrace_write(marker_fd, "[main]: creating consumer()\n");
 		pthread_create(&threads[i], &attr, consumer, (void *)id);
 		id++;
 	}
 
-	for (i = NUM_CONS; i < (NUM_CONS + NUM_PROD); i++) {
-		ftrace_write(marker_fd, "[main]: creating producer()\n");
+	for (i = global_args.num_cons; i < (global_args.num_cons +
+					    global_args.num_prod); i++) {
+		if (global_args.ftrace)
+			ftrace_write(marker_fd, "[main]: creating producer()\n");
 		pthread_create(&threads[i], &attr, producer, (void *)id);
 		id++;
 	}
 
-	ftrace_write(marker_fd, "[main]: creating annoyer()\n");
-	pthread_create(&threads[i], &attr, annoyer, (void *)id);
+	for (; i < (global_args.num_cons + global_args.num_prod +
+		    global_args.num_annoy); i++) {
+		if (global_args.ftrace)
+			ftrace_write(marker_fd, "[main]: creating annoyer()\n");
+		pthread_create(&threads[i], &attr, annoyer, (void *)id);
+		id++;
+	}
 
-	sleep(DURATION);
+	sleep(global_args.duration);
 	shutdown = 1;
-	for (i = 0; i < (NUM_CONS + NUM_PROD); i++) {
+	for (i = 0; i < (global_args.num_cons + global_args.num_prod +
+			 global_args.num_annoy); i++) {
 		kill(pids[i], 9);
 	}
 	
 	/* Wait for all threads to complete */
-	for (i = 0; i < (NUM_CONS + NUM_PROD); i++) {
+	for (i = 0; i < (global_args.num_cons + global_args.num_prod +
+			 global_args.num_annoy); i++) {
 		pthread_join(threads[i], NULL);
 	}
 	printf ("Main(): Waited and joined with %d threads. Done.\n", 
-		NUM_CONS + NUM_PROD);
+		global_args.num_cons + global_args.num_prod +
+		global_args.num_annoy);
 	
-	if (trace_fd >= 0)
+	if (global_args.ftrace && trace_fd >= 0)
 	        write(trace_fd, "0", 1);
 
 	/* Clean up and exit */
