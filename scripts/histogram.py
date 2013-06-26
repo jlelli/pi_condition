@@ -15,6 +15,7 @@ def get_names(func_file):
     return names
 
 def parse(in_file, names):
+    names_aux = []
     avgs = []
     stddevs = []
 
@@ -26,11 +27,12 @@ def parse(in_file, names):
         sline = re.split('\s+', line)
         if sline[1] in names:
             sline.pop()
-            #print sline[1:]
+            #names are shuffled...
+            names_aux.append(sline[1])
             avgs.append(float(sline[5]))
             stddevs.append(math.sqrt(float(sline[7])))
 
-    return zip(names, avgs, stddevs)
+    return zip(names_aux, avgs, stddevs)
 
 def plot(stats1, stats2):
     n = len(stats1)
@@ -55,7 +57,7 @@ def plot(stats1, stats2):
     plt.savefig('durations.png')
 
 def usage():
-    print "python histogram.py -f stat.dat"
+    print "python histogram.py -a stat1.dat -b stat2.dat -f func_names.txt"
 
 def main(argv):
     file1 = "stat1.dat"
