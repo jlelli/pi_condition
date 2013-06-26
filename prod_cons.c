@@ -44,9 +44,10 @@ struct global_args_t {
 	int pi_cv_enabled;	/* -P PI-cond enabled */
 	int ftrace;		/* -f ftrace enabled */
 	int duration;		/* -d duration (sec) */
+	int affinity;		/* -A all threads run on CPU0 */
 } global_args;
 
-static const char *opt_string = "p:c:a:Pfd:";
+static const char *opt_string = "p:c:a:Pfd:A";
 
 typedef struct {
 	int buf[BSIZE];
@@ -100,12 +101,14 @@ void *producer(void *d)
 
 	pids[id] = my_pid;
 	
-	CPU_ZERO(&mask);
-	CPU_SET(0, &mask);
-	ret = sched_setaffinity(0, sizeof(mask), &mask);
-	if (ret != 0) {
-		printf("pthread_setaffinity failed\n"); 
-		exit(EXIT_FAILURE);
+	if (global_args.affinity) {
+		CPU_ZERO(&mask);
+		CPU_SET(0, &mask);
+		ret = sched_setaffinity(0, sizeof(mask), &mask);
+		if (ret != 0) {
+			printf("pthread_setaffinity failed\n"); 
+			exit(EXIT_FAILURE);
+		}
 	}
 	
 	param.sched_priority = 92;
@@ -187,12 +190,15 @@ void *consumer(void *d)
 
 	pids[id] = my_pid;
 	
-	CPU_ZERO(&mask);
-	CPU_SET(0, &mask);
-	ret = sched_setaffinity(0, sizeof(mask), &mask);
-	if (ret != 0) {
-		printf("pthread_setaffinity failed\n"); 
-		exit(EXIT_FAILURE);
+
+	if (global_args.affinity) {
+		CPU_ZERO(&mask);
+		CPU_SET(0, &mask);
+		ret = sched_setaffinity(0, sizeof(mask), &mask);
+		if (ret != 0) {
+			printf("pthread_setaffinity failed\n"); 
+			exit(EXIT_FAILURE);
+		}
 	}
 	
 	param.sched_priority = 94;
@@ -257,12 +263,15 @@ void *annoyer(void *d)
 
 	pids[id] = my_pid;
 	
-	CPU_ZERO(&mask);
-	CPU_SET(0, &mask);
-	ret = sched_setaffinity(0, sizeof(mask), &mask);
-	if (ret != 0) {
-		printf("pthread_setaffinity failed\n"); 
-		exit(EXIT_FAILURE);
+
+	if (global_args.affinity) {
+		CPU_ZERO(&mask);
+		CPU_SET(0, &mask);
+		ret = sched_setaffinity(0, sizeof(mask), &mask);
+		if (ret != 0) {
+			printf("pthread_setaffinity failed\n"); 
+			exit(EXIT_FAILURE);
+		}
 	}
 	
 	param.sched_priority = 93;
@@ -318,6 +327,7 @@ int main(int argc, char *argv[])
 	global_args.pi_cv_enabled = 0;
 	global_args.ftrace = 0;
 	global_args.duration = 10;
+	global_args.affinity = 0;
 
 	opt = getopt(argc, argv, opt_string);
 	while (opt != -1) {
@@ -325,20 +335,23 @@ int main(int argc, char *argv[])
 		case 'p':
 			global_args.num_prod = atoi(optarg);
 			break;
-		case 'c':	
+		case 'c':
 			global_args.num_cons = atoi(optarg);
 			break;
-		case 'a':	
+		case 'a':
 			global_args.num_annoy = atoi(optarg);
 			break;
-		case 'P':	
+		case 'P':
 			global_args.pi_cv_enabled = 1;
 			break;
-		case 'f':	
+		case 'f':
 			global_args.ftrace = 1;
 			break;
-		case 'd':	
+		case 'd':
 			global_args.duration = atoi(optarg);
+			break;
+		case 'A':
+			global_args.affinity = 1;
 			break;
 		}
 		
@@ -358,12 +371,15 @@ int main(int argc, char *argv[])
 		marker_fd = open(path, O_WRONLY);
 	}
 	
-	CPU_ZERO(&mask);
-	CPU_SET(1, &mask);
-	ret = sched_setaffinity(0, sizeof(mask), &mask);
-	if (ret != 0) {
-		printf("pthread_setaffinity failed\n"); 
-		exit(EXIT_FAILURE);
+
+	if (global_args.affinity) {
+		CPU_ZERO(&mask);
+		CPU_SET(1, &mask);
+		ret = sched_setaffinity(0, sizeof(mask), &mask);
+		if (ret != 0) {
+			printf("pthread_setaffinity failed\n"); 
+			exit(EXIT_FAILURE);
+		}
 	}
 	
 	param.sched_priority = 99;
