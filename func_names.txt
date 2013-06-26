@@ -1,0 +1,6 @@
+do_futex
+futex_wait_queue_me
+futex_requeue
+task_blocks_on_condvar
+task_wakes_on_condvar
+futex_lock_pi_atomic
