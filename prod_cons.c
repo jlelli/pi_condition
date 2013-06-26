@@ -66,6 +66,16 @@ int marker_fd = -1;
 int pi_cv_enabled = 0;
 volatile int shutdown = 0;
 
+static inline long rand_wait(void)
+{
+	int min = 10, max = 101;
+	long result;
+
+	result = (rand() % (max - min)) + min;
+
+	return result;
+}
+
 static inline busywait(struct timespec *to)
 {
 	struct timespec t_step;
@@ -81,6 +91,7 @@ void *producer(void *d)
 	int ret;
 	struct sched_param param;
 	long id = (long) d;
+	long wait;
 	int item = id;
 	buffer_t *b = &buffer;
 	struct timespec twait, now;
@@ -125,13 +136,14 @@ void *producer(void *d)
 		assert(b->occupied < BSIZE);
 
 		b->buf[b->nextin++] = item;
-		twait = usec_to_timespec(600000L);
+		wait = rand_wait() * 1000;
+		twait = usec_to_timespec(wait);
 		clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now);
 		twait = timespec_add(&now, &twait);
 		busywait(&twait);
 		if (global_args.ftrace)
-			ftrace_write(marker_fd, "[prod %d] produced %d\n",
-				     my_pid, item);
+			ftrace_write(marker_fd, "[prod %d] executed for %d usec"
+				     " and produced %d\n", my_pid, wait, item);
 
 		b->nextin %= BSIZE;
 		b->occupied++;
@@ -166,6 +178,7 @@ void *consumer(void *d)
 	int ret;
 	struct sched_param param;
 	long id = (long) d;
+	long wait;
 	int item;
 	buffer_t *b = &buffer;
 	struct timespec twait, now;
@@ -208,13 +221,14 @@ void *consumer(void *d)
 		assert(b->occupied > 0);
 	
 		item = b->buf[b->nextout++];
-		twait = usec_to_timespec(300000L);
+		wait = rand_wait() * 1000;
+		twait = usec_to_timespec(wait);
 		clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now);
 		twait = timespec_add(&now, &twait);
 		busywait(&twait);
 		if (global_args.ftrace)
-			ftrace_write(marker_fd, "[cons %d] consumed %d\n",
-				     my_pid, item);
+			ftrace_write(marker_fd, "[cons %d] executed for %d usec"
+				     " and consumed %d\n", my_pid, wait, item);
 
 		b->nextout %= BSIZE;
 		b->occupied--;
@@ -269,7 +283,8 @@ void *annoyer(void *d)
 		ftrace_write(marker_fd, "Starting annoyer(): prio 93\n");
 
 	while(1) {
-		twait = usec_to_timespec(200000L);
+		/* 300ms */
+		twait = usec_to_timespec(300000L);
 		if (global_args.ftrace)
 			ftrace_write(marker_fd,
 				     "[annoyer %d] starts running...\n",
@@ -359,6 +374,8 @@ int main(int argc, char *argv[])
 		printf("pthread_setschedparam failed\n"); 
 		exit(EXIT_FAILURE);
 	}
+
+	srand(time(NULL));
 	
 	/* Initialize mutex and condition variable objects */
 	pthread_mutexattr_init(&buffer.mutex_attr);
