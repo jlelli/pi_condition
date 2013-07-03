@@ -54,7 +54,7 @@ def plot(stats1, stats2):
     ax.legend((rects1[0], rects2[0]),('no_pi','pi'))
 
     plt.tight_layout()
-    plt.savefig('durations.png')
+    plt.savefig('durations.eps')
 
 def usage():
     print "python histogram.py -a stat1.dat -b stat2.dat -f func_names.txt"

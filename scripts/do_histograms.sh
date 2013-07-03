@@ -10,10 +10,9 @@ mkdir -p ${PLOTS_PATH}
 for p in `seq 1 3`; do
     for c in `seq 1 3`; do
         for a in `seq 1 2`; do
-	    # without PI-cond
             ./scripts/histogram.py -a ${RESULTS_PATH}/stat_no_pi_${p}prod_${c}cons_${a}annoy.dat\
             -b ${RESULTS_PATH}/stat_pi_${p}prod_${c}cons_${a}annoy.dat -f func_names.txt
-            mv durations.png ${PLOTS_PATH}/${p}prod_${c}cons_${a}annoy.png
+            mv durations.eps ${PLOTS_PATH}/${p}prod_${c}cons_${a}annoy.eps
 	done
     done
 done
