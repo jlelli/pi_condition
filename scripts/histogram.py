@@ -87,6 +87,7 @@ def plot(stats1, stats2):
     n = len(stats1)
     ind = numpy.arange(n)
     width = 0.35
+    names = ['a','b','c','d','e','f']
 
     stddevs1 = []
     names1, avgs1, vars1 = zip(*stats1)
@@ -99,6 +100,7 @@ def plot(stats1, stats2):
         stddevs2.append(math.sqrt(vars2[i]))
 
     fig = plt.figure()
+    fig.set_size_inches(10,6)
     ax = fig.add_subplot(111)
     rects1 = ax.bar(ind, avgs1, width, color='r', yerr=stddevs1)
     rects2 = ax.bar(ind+width, avgs2, width, color='y', yerr=stddevs2)
@@ -106,12 +108,13 @@ def plot(stats1, stats2):
     ax.set_ylabel('duration (us)')
     ax.set_ylim(0, 25)
     ax.set_xticks(ind+width)
-    ax.set_xticklabels(names1, rotation=60, size='medium')
+    #ax.set_xticklabels(names1, rotation=60, size='medium')
+    ax.set_xticklabels(names, size='medium')
 
     ax.legend((rects1[0], rects2[0]),('no_pi','pi'))
 
     plt.tight_layout()
-    plt.savefig('durations.eps')
+    plt.savefig('durations.eps', dpi=80)
 
 def usage():
     print "python histogram.py -a stat1.dat -b stat2.dat -f func_names.txt"
