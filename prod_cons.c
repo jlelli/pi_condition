@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/stat.h> 
+#include <sys/syscall.h> 
 #include <fcntl.h>
 #include <assert.h>
 #include <sys/types.h>
@@ -77,7 +78,7 @@ static inline long rand_wait(void)
 	return result;
 }
 
-static inline busywait(struct timespec *to)
+static inline void busywait(struct timespec *to)
 {
 	struct timespec t_step;
 	while (1) {
@@ -174,6 +175,8 @@ void *producer(void *d)
 				     " pid %d, prio 92\n", my_pid);
 		}
 	}
+
+	pthread_exit(NULL);
 }
 
 void *consumer(void *d)
@@ -250,6 +253,8 @@ void *consumer(void *d)
 		pthread_cond_signal(&b->less);
 		pthread_mutex_unlock(&b->mutex);
 	}
+
+	pthread_exit(NULL);
 }
 
 void *annoyer(void *d)

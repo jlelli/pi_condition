@@ -16,8 +16,10 @@
 #ifndef __DL_SYSCALLS__
 #define __DL_SYSCALLS__
 
+#define _GNU_SOURCE
 #include <linux/kernel.h>
 #include <linux/unistd.h>
+#include <sys/syscall.h>
 #include <time.h>
 #include <linux/types.h>
 #include <pthread.h>
